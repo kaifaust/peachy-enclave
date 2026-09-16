@@ -1,4 +1,7 @@
-# Tinfoil Container definition for peachy-assistant — STAGING shape.
+# Tinfoil Container definition for peachy-assistant — the PRODUCTION shape.
+#
+# The container was created on 2026-09-17. This file is no longer a proposal:
+# it is what the deployed enclave is measured against.
 #
 # Source of truth lives here, in the private repo, beside the Dockerfile it
 # pins. Tinfoil reads it from the root of a PUBLIC GitHub repo (the measurement
@@ -37,9 +40,11 @@ networks:
       # `/v1/postgres/<id>/connection-info`; the internal `dpg-…-a` form is
       # RFC1918 and unreachable from an enclave).
       - dpg-d9jrmi67r5hc73ddemi0-a.oregon-postgres.render.com
-      # Model providers. Both, because PEACHY_INFERENCE_PROVIDER=cohort routes
-      # per user (server/inference.ts) and a run's provider is not known here.
-      - api.anthropic.com
+      # The model provider. ONE, since 2026-09-17: every call goes to the
+      # attested enclave (server/inference.ts). api.anthropic.com came OUT of
+      # this list that day, which makes the allowlist itself part of the
+      # claim — a build of this image physically cannot reach Anthropic, and
+      # the allowlist is inside what the attestation measures.
       - inference.tinfoil.sh
       # Attestation of inference.tinfoil.sh at boot (server/tinfoil-attest.ts
       # via @tinfoilsh/verifier). MEASURED on 2026-09-17 by running a full
@@ -78,7 +83,7 @@ containers:
     # publicly pullable doesn't affect verifiability" — but pulling a private
     # one needs registry credentials, and this org does not have that
     # entitlement yet (§Decisions that are not mine to make).
-    image: ghcr.io/kaifaust/peachy-assistant:v0.1.1@sha256:0ee70b02c90ec35ba8ad77444cd32dcdd85fac6aab06eff6ebb6159089ee46d0
+    image: ghcr.io/kaifaust/peachy-assistant:v0.1.2@sha256:ed4427cc474f2e67de866cb63c5a68f48708e7a6a7c1926f07a29b6c8e57c3ca
     networks: [egress]
     env:
       # server/db.ts productionSignal() keys off RENDER; outside Render it is
@@ -88,14 +93,32 @@ containers:
       - RENDER_SERVICE_NAME: peachy-assistant-tinfoil
       - PEACHY_HEALTH_PORT: "8080"
       - NODE_COMPILE_CACHE: /tmp/peachy-agent-cc
+      # WHICH MODEL, IN PUBLIC. These three moved out of `secrets:` on
+      # 2026-09-17, and the move is the point: everything in this file is
+      # published, base64'd, inside the measured release artifact, so declaring
+      # them here makes the provider and the model part of what the attestation
+      # commits to. Anyone verifying the enclave can read which model answered
+      # them, rather than taking our word for it. `tinfoil` is also the only
+      # value the worker will boot on (server/inference.ts).
+      - PEACHY_INFERENCE_PROVIDER: tinfoil
+      - PEACHY_TINFOIL_MODEL: glm-5-3-flash
+      # deepseek and not glm on the fast tier: glm-5-3-flash answered 0/23 of
+      # the triage eval inside triage.ts's 8 s budget on 2026-09-17 while
+      # deepseek-v4-1-flash answered 22/23 at half the latency
+      # (docs/inference-provider.md §Re-measured on 2026-09-17, and it is a RED).
+      # A timed-out triage batch buzzes everyone and silently empties the
+      # commons, so the fast tier stays on the model that answers in time until
+      # a re-measurement says otherwise.
+      - PEACHY_TINFOIL_FAST_MODEL: deepseek-v4-1-flash
     # Names only; values live in Tinfoil's secret store (or, for private
     # secrets, in a keyserver Peachy runs). The list matches render.yaml's
-    # peachy-assistant `sync: false` block plus the two rung-1 variables.
+    # peachy-assistant `sync: false` block. Shorter since 2026-09-17:
+    # ANTHROPIC_API_KEY is gone because nothing reads it, and
+    # PEACHY_INFERENCE_PROVIDER moved to the public `env:` block above, where
+    # it says something a verifier can check.
     secrets:
       - DATABASE_URL
-      - ANTHROPIC_API_KEY
       - TINFOIL_API_KEY
-      - PEACHY_INFERENCE_PROVIDER
       - GOOGLE_MAPS_API_KEY
       - R2_ACCOUNT_ID
       - R2_ACCESS_KEY_ID
