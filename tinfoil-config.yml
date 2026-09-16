@@ -86,7 +86,7 @@ containers:
     # publicly pullable doesn't affect verifiability" — but pulling a private
     # one needs registry credentials, and this org does not have that
     # entitlement yet (§Decisions that are not mine to make).
-    image: ghcr.io/kaifaust/peachy-assistant:v0.1.3@sha256:3af9aa9b60b542160365bb5ce8cd459e917e37376cafc7d27ea59e98662bb5c5
+    image: ghcr.io/kaifaust/peachy-assistant:v0.1.4@sha256:59cd608a1cb9397bd0be6ca75f32432619dba5f85ae852529334ceeb6736f68b
     networks: [egress]
     env:
       # server/db.ts productionSignal() keys off RENDER; outside Render it is
@@ -126,6 +126,16 @@ containers:
       # commons, so the fast tier stays on the model that answers in time until
       # a re-measurement says otherwise.
       - PEACHY_TINFOIL_FAST_MODEL: deepseek-v4-1-flash
+      # Rung-2 step 1 (docs/rung2-worker-migration.md): this process CLAIMS
+      # `triage_jobs`, so the push-triage prompt — the one model prompt that
+      # reads other people's messages on the API's behalf — is assembled in
+      # here, inside the measurement, and peachy-api hands over message ids
+      # only. Declared in public for the same reason the model ids are: a
+      # verifier can read that the enclave, not the operator's API, is the
+      # process that reads those words for triage. The API side of the flag is
+      # set separately (Doppler prd); either side alone is safe — an unclaimed
+      # job times out into the existing no-verdict path and fails OPEN.
+      - PEACHY_TRIAGE_IN_WORKER: "1"
     # Names only; values live in Tinfoil's secret store (or, for private
     # secrets, in a keyserver Peachy runs). The list matches render.yaml's
     # peachy-assistant `sync: false` block. Shorter since 2026-09-17:
