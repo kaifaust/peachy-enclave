@@ -1,58 +1,138 @@
-# Tinfoil Container configuration — EGRESS PROBE (tag probe-v0.0.1).
+# Tinfoil Container definition for peachy-assistant — STAGING shape.
 #
-# A throwaway workload whose only job is to report the source IP a Tinfoil
-# Container presents to the public internet, and whether it is stable between
-# requests and across a relaunch. It holds no secrets, reads no database and
-# has no state; the whole of it is Dockerfile + egress-probe.sh in this repo.
+# Source of truth lives here, in the private repo, beside the Dockerfile it
+# pins. Tinfoil reads it from the root of a PUBLIC GitHub repo (the measurement
+# is published to Sigstore against that repo's tagged releases), so the release
+# workflow copies this file verbatim into that repo's tag; see
+# docs/tinfoil-container.md §The public config repo. Nothing here is secret BY
+# CONSTRUCTION — the whole file is published, base64'd, inside the measured
+# release artifact — which is why the values below are names, digests and
+# hostnames only.
 #
-# Schema: github.com/tinfoilsh/tinfoil-config.
+# Schema: github.com/tinfoilsh/tinfoil-config. Resources are measured and
+# immutable — changing them is a new release, not a dashboard edit.
 
+# Private secrets (keyserver-released, sealed to the attestation) need ≥ 0.13.0
+# and egress allowlists ≥ 0.10.0, so either would do. 0.14.7 because that is
+# what the egress probe actually ran on 2026-09-16 and what the template ships
+# today — an untested older CVM image buys nothing.
 cvm-version: 0.14.7
 
-# The smallest shape on offer. 2 cores + 8 GB is $0.06/core/hr + $0.01/GB/hr
-# = $0.20/hr, so this costs cents for the length of the measurement.
+# The smallest shape on offer (2 cores / 8 GB). 8 GB is 4× the Render plan the
+# worker runs on today; server/container.ts derives the concurrent-run cap from
+# the cgroup limit, so this boots announcing ~16 runs rather than today's 6
+# with no code change. ~$166/month at list price, running 24/7.
 cpus: 2
 memory: 8192
 
 networks:
   egress:
-    # Hostnames only, no wildcards, no IP literals; re-resolved about every
-    # 60s, and only IPv4 addresses are allowlisted. RFC1918 is blocked
-    # regardless of policy.
+    # Hostnames only, IPv4 only, re-resolved about every 60s, no wildcards.
+    # RFC1918 is blocked regardless — Render's internal `dpg-…-a` hostname is
+    # unreachable from here, hence the EXTERNAL Postgres host below and the
+    # inbound-allowlist question in docs/tinfoil-container.md §Postgres egress.
     egress: allowlist
     allow:
-      # Three independent "what is my IP" services, so a surprising answer can
-      # be cross-checked rather than believed. api64 is the dual-stack
-      # endpoint: if the enclave had IPv6 egress, this is where it would show.
-      - api.ipify.org
-      - api64.ipify.org
-      - checkip.amazonaws.com
+      # Postgres — peachy-db's EXTERNAL hostname (from Render's
+      # `/v1/postgres/<id>/connection-info`; the internal `dpg-…-a` form is
+      # RFC1918 and unreachable from an enclave).
+      - dpg-d9jrmi67r5hc73ddemi0-a.oregon-postgres.render.com
+      # Model providers. Both, because PEACHY_INFERENCE_PROVIDER=cohort routes
+      # per user (server/inference.ts) and a run's provider is not known here.
+      - api.anthropic.com
+      - inference.tinfoil.sh
+      # Attestation of inference.tinfoil.sh at boot (server/tinfoil-attest.ts
+      # via @tinfoilsh/verifier). MEASURED on 2026-09-17 by running a full
+      # verify with dns.lookup and fetch instrumented: the verifier fetches the
+      # GitHub release metadata and AMD's VCEK chain through Tinfoil's own
+      # proxies, and the Sigstore trust root ships inside the package, so
+      # these three hosts are the whole set. (The earlier guess listed
+      # api.github.com, github.com, two sigstore hosts and kdsintf.amd.com —
+      # none were contacted.) A missing host here fails closed as a 503 on
+      # every cohort run, so re-measure after bumping @tinfoilsh/verifier.
+      - github-proxy.tinfoil.sh
+      - kds-proxy.tinfoil.sh
+      # Tools the run may call.
+      - places.googleapis.com
+      # R2 — the account's S3 endpoint and the public media host, derived from
+      # prd's R2_ACCOUNT_ID and R2_PUBLIC_BASE_URL on 2026-09-17. Both are
+      # already public: the media host is in every image URL the app serves.
+      - c6b00e1a7686e9f69631784067aef768.r2.cloudflarestorage.com
+      - pub-8dfa5e1a5ad9455b8806d7af46594254.r2.dev
 
+# A LIST of containers, each with a `name` — not a map keyed by name. The
+# decoder in tinfoilsh/tinfoil-config declares `Containers []Container`, so the
+# map form this file used until 2026-09-16 would have been rejected at the
+# first release. The list form is the one the probe release actually validated
+# (docs/tinfoil-container.md §Measured egress). `env` is a list of single-key
+# mappings for the same reason.
 containers:
-  - name: "egress-probe"
-    image: "ghcr.io/kaifaust/peachy-enclave/egress-probe@sha256:dcb70c2449111e03ab07b90b736a6fefc6419ca148aec2f7d209f248699353a1"
+  - name: worker
+    # Digest-pinned, never a bare tag: the digest is what the attestation
+    # commits to. The release workflow substitutes the real digest into the
+    # tagged copy; main keeps the zero placeholder on purpose so a copy-paste
+    # cannot float.
+    #
+    # The image may STAY PRIVATE — the docs are explicit that pinning by digest
+    # is what makes a deployment verifiable, and "whether the image bytes are
+    # publicly pullable doesn't affect verifiability" — but pulling a private
+    # one needs registry credentials, and this org does not have that
+    # entitlement yet (§Decisions that are not mine to make).
+    image: ghcr.io/kaifaust/peachy-assistant:v0.1.0@sha256:ea450fbf9b16a1422e82e65483a36fd43dc1282be7068574949776311f1990de
     networks: [egress]
-    # The enclave root filesystem is read-only by default; the probe writes
-    # exactly one file (its boot timestamp), so /tmp is a small tmpfs.
+    env:
+      # server/db.ts productionSignal() keys off RENDER; outside Render it is
+      # unset and server/container.ts would size the run cap off the host's
+      # RAM if the cgroup limit were ever unreadable. Keep the fail-safe armed.
+      - RENDER: "1"
+      - RENDER_SERVICE_NAME: peachy-assistant-tinfoil
+      - PEACHY_HEALTH_PORT: "8080"
+      - NODE_COMPILE_CACHE: /tmp/peachy-agent-cc
+    # Names only; values live in Tinfoil's secret store (or, for private
+    # secrets, in a keyserver Peachy runs). The list matches render.yaml's
+    # peachy-assistant `sync: false` block plus the two rung-1 variables.
+    secrets:
+      - DATABASE_URL
+      - ANTHROPIC_API_KEY
+      - TINFOIL_API_KEY
+      - PEACHY_INFERENCE_PROVIDER
+      - GOOGLE_MAPS_API_KEY
+      - R2_ACCOUNT_ID
+      - R2_ACCESS_KEY_ID
+      - R2_SECRET_ACCESS_KEY
+      - R2_BUCKET
+      - R2_PUBLIC_BASE_URL
+      - R2_PRIVATE_BUCKET
+    # The root filesystem is read-only by default (keep it). The spawned Claude
+    # Code CLI and its compile cache write under /tmp, so that gets a tmpfs —
+    # RAM, counted against the 8 GB, wiped on every relaunch.
     read_only: true
     tmpfs:
-      /tmp: "size=16m,mode=1777"
+      /tmp: "size=1g,mode=1777"
+    # Docker-Compose-shaped. An `Unhealthy` during boot fails the deployment,
+    # which is what we want: a worker that cannot reach Postgres should not
+    # become the live one. start_period covers applySchema + the enclave
+    # attestation warm-up.
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
       interval: 10s
       timeout: 5s
       retries: 6
-      start_period: 20s
+      start_period: 90s
     restart: always
     stop_signal: SIGTERM
-    stop_timeout: 5
+    # server/assistant-main.ts drains in-flight runs for up to 25s on SIGTERM.
+    stop_timeout: 30
 
-# A deployment must forward a port. Only the two real paths are exposed —
-# deliberately the explicit-path form rather than the template's `/*`, because
-# the assistant's config uses the same form and this is the cheapest place to
-# find out whether it works.
+# Mandatory, and the reason the worker grew a health listener: a deployment
+# must forward SOMETHING. Only the two health paths are exposed; everything
+# else 404s at the shim. There is no inbound rpc surface here by design —
+# the worker's inputs and outputs cross Postgres (server/assistant-main.ts).
+#
+# The explicit-path form (rather than the template's `/*`) was verified on the
+# probe deployment: both listed paths answered through the shim.
 shim:
   upstream-port: 8080
   paths:
     - /healthz
-    - /ip
+    - /healthz/config
