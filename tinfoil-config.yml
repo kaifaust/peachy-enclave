@@ -22,9 +22,12 @@
 cvm-version: 0.14.7
 
 # The smallest shape on offer (2 cores / 8 GB). 8 GB is 4× the Render plan the
-# worker runs on today; server/container.ts derives the concurrent-run cap from
-# the cgroup limit, so this boots announcing ~16 runs rather than today's 6
-# with no code change. ~$166/month at list price, running 24/7.
+# worker ran on. server/container.ts derives the concurrent-run cap from the
+# cgroup limit — but the cgroup files are NOT readable inside the enclave, so
+# the derivation takes its fail-safe and announces 2 rather than the ~16 this
+# shape would otherwise buy. PEACHY_MAX_CONCURRENT_RUNS below is how the memory
+# declared here reaches the process that has to live inside it.
+# ~$166/month at list price, running 24/7.
 cpus: 2
 memory: 8192
 
@@ -83,7 +86,7 @@ containers:
     # publicly pullable doesn't affect verifiability" — but pulling a private
     # one needs registry credentials, and this org does not have that
     # entitlement yet (§Decisions that are not mine to make).
-    image: ghcr.io/kaifaust/peachy-assistant:v0.1.2@sha256:ed4427cc474f2e67de866cb63c5a68f48708e7a6a7c1926f07a29b6c8e57c3ca
+    image: ghcr.io/kaifaust/peachy-assistant:v0.1.3@sha256:3af9aa9b60b542160365bb5ce8cd459e917e37376cafc7d27ea59e98662bb5c5
     networks: [egress]
     env:
       # server/db.ts productionSignal() keys off RENDER; outside Render it is
@@ -91,6 +94,19 @@ containers:
       # RAM if the cgroup limit were ever unreadable. Keep the fail-safe armed.
       - RENDER: "1"
       - RENDER_SERVICE_NAME: peachy-assistant-tinfoil
+      # …and this is the other half: the operator pin that overrules that
+      # fail-safe, because in here the budget IS known — it is the `memory:`
+      # figure a dozen lines up, published and measured with the rest of this
+      # file. FOUR and not the sixteen 8 GB would derive to, deliberately:
+      #   * each concurrent run is a spawned Agent SDK CLI subprocess, ~400 MB
+      #     RSS measured (see the header of server/container.ts);
+      #   * /tmp is a 1 GB tmpfs below, which is RAM and counts against the
+      #     same 8 GB — the derivation knows nothing about it;
+      #   * an OOM in here is not a restart, it is an enclave relaunch.
+      # 320 MB reserve + 512 first run + 3 × 224 MB ≈ 1.5 GB by the model, ~2 GB
+      # by the pessimistic 400 MB-a-run reading, plus the tmpfs: comfortable.
+      # Raise it once there is a measurement from inside a live enclave.
+      - PEACHY_MAX_CONCURRENT_RUNS: "4"
       - PEACHY_HEALTH_PORT: "8080"
       - NODE_COMPILE_CACHE: /tmp/peachy-agent-cc
       # WHICH MODEL, IN PUBLIC. These three moved out of `secrets:` on
