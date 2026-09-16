@@ -1,0 +1,58 @@
+# Tinfoil Container configuration — EGRESS PROBE (tag probe-v0.0.1).
+#
+# A throwaway workload whose only job is to report the source IP a Tinfoil
+# Container presents to the public internet, and whether it is stable between
+# requests and across a relaunch. It holds no secrets, reads no database and
+# has no state; the whole of it is Dockerfile + egress-probe.sh in this repo.
+#
+# Schema: github.com/tinfoilsh/tinfoil-config.
+
+cvm-version: 0.14.7
+
+# The smallest shape on offer. 2 cores + 8 GB is $0.06/core/hr + $0.01/GB/hr
+# = $0.20/hr, so this costs cents for the length of the measurement.
+cpus: 2
+memory: 8192
+
+networks:
+  egress:
+    # Hostnames only, no wildcards, no IP literals; re-resolved about every
+    # 60s, and only IPv4 addresses are allowlisted. RFC1918 is blocked
+    # regardless of policy.
+    egress: allowlist
+    allow:
+      # Three independent "what is my IP" services, so a surprising answer can
+      # be cross-checked rather than believed. api64 is the dual-stack
+      # endpoint: if the enclave had IPv6 egress, this is where it would show.
+      - api.ipify.org
+      - api64.ipify.org
+      - checkip.amazonaws.com
+
+containers:
+  - name: "egress-probe"
+    image: "ghcr.io/kaifaust/peachy-enclave/egress-probe@sha256:dcb70c2449111e03ab07b90b736a6fefc6419ca148aec2f7d209f248699353a1"
+    networks: [egress]
+    # The enclave root filesystem is read-only by default; the probe writes
+    # exactly one file (its boot timestamp), so /tmp is a small tmpfs.
+    read_only: true
+    tmpfs:
+      /tmp: "size=16m,mode=1777"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: always
+    stop_signal: SIGTERM
+    stop_timeout: 5
+
+# A deployment must forward a port. Only the two real paths are exposed —
+# deliberately the explicit-path form rather than the template's `/*`, because
+# the assistant's config uses the same form and this is the cheapest place to
+# find out whether it works.
+shim:
+  upstream-port: 8080
+  paths:
+    - /healthz
+    - /ip
