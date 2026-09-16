@@ -1,6 +1,6 @@
 name: probe-image
 
-# Build the egress probe and push it to ghcr.io/kaifaust/peachy-egress-probe.
+# Build the egress probe and push it to ghcr.io/kaifaust/peachy-enclave/egress-probe.
 #
 # It is built HERE, from a public repository, rather than in the private Peachy
 # repo, for one reason: a package published by GITHUB_TOKEN inherits the
@@ -9,6 +9,12 @@ name: probe-image
 # "private registry access is not enabled for this organization"). Building it
 # from the private repo produced a private package that ghcr answers 403 to
 # anonymously, with no way to flip it without a classic PAT.
+#
+# The package is named under this repo (kaifaust/peachy-enclave/egress-probe)
+# rather than kaifaust/peachy-egress-probe because that flatter name was
+# already taken by the private build, and GITHUB_TOKEN here cannot write to a
+# package linked to another repository ("denied: permission_denied:
+# read_package").
 on:
   workflow_dispatch:
     inputs:
@@ -49,7 +55,7 @@ jobs:
           push: true
           provenance: false
           tags: |
-            ghcr.io/${{ github.repository_owner }}/peachy-egress-probe:${{ inputs.version }}
+            ghcr.io/${{ github.repository_owner }}/peachy-enclave/egress-probe:${{ inputs.version }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
@@ -57,4 +63,4 @@ jobs:
       # reference a floating tag.
       - name: Record the digest
         run: |
-          echo "image: ghcr.io/${{ github.repository_owner }}/peachy-egress-probe@${{ steps.push.outputs.digest }}" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "image: ghcr.io/${{ github.repository_owner }}/peachy-enclave/egress-probe@${{ steps.push.outputs.digest }}" | tee -a "$GITHUB_STEP_SUMMARY"
