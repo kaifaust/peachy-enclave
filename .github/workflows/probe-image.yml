@@ -1,0 +1,60 @@
+name: probe-image
+
+# Build the egress probe and push it to ghcr.io/kaifaust/peachy-egress-probe.
+#
+# It is built HERE, from a public repository, rather than in the private Peachy
+# repo, for one reason: a package published by GITHUB_TOKEN inherits the
+# visibility of the repository whose workflow published it, and Tinfoil cannot
+# pull a private image for this org (`tinfoil registry list` answers
+# "private registry access is not enabled for this organization"). Building it
+# from the private repo produced a private package that ghcr answers 403 to
+# anonymously, with no way to flip it without a classic PAT.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image tag (e.g. probe-v0.0.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: probe-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/peachy-egress-probe:${{ inputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      # The digest is what tinfoil-config.yml pins; a Tinfoil config may not
+      # reference a floating tag.
+      - name: Record the digest
+        run: |
+          echo "image: ghcr.io/${{ github.repository_owner }}/peachy-egress-probe@${{ steps.push.outputs.digest }}" | tee -a "$GITHUB_STEP_SUMMARY"
