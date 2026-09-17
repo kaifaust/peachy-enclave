@@ -86,7 +86,7 @@ containers:
     # publicly pullable doesn't affect verifiability" — but pulling a private
     # one needs registry credentials, and this org does not have that
     # entitlement yet (§Decisions that are not mine to make).
-    image: ghcr.io/kaifaust/peachy-assistant:v0.1.4@sha256:59cd608a1cb9397bd0be6ca75f32432619dba5f85ae852529334ceeb6736f68b
+    image: ghcr.io/kaifaust/peachy-assistant:v0.1.5@sha256:e645ceb6b578a7e2323e1d1ce3aea2c3e854cc7b786b87e2011314876df4b5d2
     networks: [egress]
     env:
       # server/db.ts productionSignal() keys off RENDER; outside Render it is
@@ -136,6 +136,12 @@ containers:
       # set separately (Doppler prd); either side alone is safe — an unclaimed
       # job times out into the existing no-verdict path and fails OPEN.
       - PEACHY_TRIAGE_IN_WORKER: "1"
+      # Rung-2 step 3 (docs/rung2-worker-migration.md): the same move for the
+      # TAGGER, which is the highest-volume body→prompt path in the product —
+      # one classification per message sent, plus the ten-minute backfill sweep
+      # that the API stops running under this flag and this process takes over.
+      # peachy-api hands over a kind and an id; the words are read in here.
+      - PEACHY_TAGGER_IN_WORKER: "1"
     # Names only; values live in Tinfoil's secret store (or, for private
     # secrets, in a keyserver Peachy runs). The list matches render.yaml's
     # peachy-assistant `sync: false` block. Shorter since 2026-09-17:
