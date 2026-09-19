@@ -57,11 +57,25 @@ networks:
       # these three hosts are the whole set. (The earlier guess listed
       # api.github.com, github.com, two sigstore hosts and kdsintf.amd.com —
       # none were contacted.) A missing host here fails closed as a 503 on
-      # every cohort run, so re-measure after bumping @tinfoilsh/verifier.
+      # every run, for everyone — there are no cohorts — so re-measure after
+      # bumping @tinfoilsh/verifier.
       - github-proxy.tinfoil.sh
       - kds-proxy.tinfoil.sh
-      # Tools the run may call.
+      # Tools the run may call. The assistant's tools execute IN-PROCESS against
+      # the rpc handlers (server/ai-tools.ts imports chatServiceHandlers from
+      # ./routes and dials a `https://internal/…` URL that never leaves the
+      # process), so a tool annotated AI_ACCESS_TOOL reaches whatever its
+      # handler reaches — from in here, not from peachy-api. search_places is
+      # the one with an outbound leg, and it has TWO: a text query goes to
+      # places.googleapis.com (server/google-places.ts searchGooglePlaces), and
+      # the current-location branch goes to maps.googleapis.com
+      # (reverseGeocodeGoogle, server/handlers/places.ts). The second host was
+      # missing here until 2026-09-18 and the failure was silent by
+      # construction — reverseGeocodeGoogle "never throws" and answers null on a
+      # blocked fetch, so the tool degraded to the bundled gazetteer inside the
+      # enclave while working perfectly on peachy-api. Both hosts, or neither.
       - places.googleapis.com
+      - maps.googleapis.com
       # R2 — the account's S3 endpoint and the public media host, derived from
       # prd's R2_ACCOUNT_ID and R2_PUBLIC_BASE_URL on 2026-09-17. Both are
       # already public: the media host is in every image URL the app serves.
