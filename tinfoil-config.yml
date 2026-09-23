@@ -100,7 +100,7 @@ containers:
     # publicly pullable doesn't affect verifiability" — but pulling a private
     # one needs registry credentials, and this org does not have that
     # entitlement yet (§Decisions that are not mine to make).
-    image: ghcr.io/kaifaust/peachy-assistant:v0.1.7@sha256:5f8f728f1dbb876d4cbddfb0acafafdff480f379e538c47dc13e7dc1b0eb08e4
+    image: ghcr.io/kaifaust/peachy-assistant:v0.1.8@sha256:b5ac6a2a8f07b3ba92767ed5833c480891adb49d33a4305b888c9ffc7f8b4363
     networks: [egress]
     env:
       # server/db.ts productionSignal() keys off RENDER; outside Render it is
@@ -156,6 +156,29 @@ containers:
       # that the API stops running under this flag and this process takes over.
       # peachy-api hands over a kind and an id; the words are read in here.
       - PEACHY_TAGGER_IN_WORKER: "1"
+      # CONTACT DISCOVERY (docs/contact-discovery.md). The one path in here
+      # that handles PHONE NUMBERS rather than message text: peachy-api relays
+      # a sealed address book it cannot open, this process opens it, matches it
+      # and seals the answer back. Declared in the public, measured block for
+      # the same reason the model ids are — a verifier can read off the release
+      # artifact that contact matching happens inside the measurement, rather
+      # than taking our word for it.
+      #
+      # The key pair it seals against is generated at boot IN HERE and mounted
+      # from nowhere, so there is no secret to add below; only the public half
+      # leaves, on /healthz/config, which the shim already exposes. A relaunch
+      # invalidates it, which is the point.
+      #
+      # The API side reads the same flag the other way round: it relays unless
+      # explicitly off, and this side claims only when explicitly on
+      # (server/contact-jobs.ts). Neither side alone is unsafe: with the API's
+      # off nothing is ever enqueued, and with this one off every discovery
+      # call answers `unavailable`. That is fail CLOSED and the end of it —
+      # the plaintext SyncContacts is DELETED, so there is nothing to fall
+      # back to (docs/contact-discovery.md §The two rpcs). Every client shows
+      # "contact matching is unavailable" and sends nothing until a claimer
+      # is here.
+      - PEACHY_CONTACTS_IN_ENCLAVE: "1"
     # Names only; values live in Tinfoil's secret store (or, for private
     # secrets, in a keyserver Peachy runs). The list matches render.yaml's
     # peachy-assistant `sync: false` block. Shorter since 2026-09-17:
