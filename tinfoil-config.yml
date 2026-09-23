@@ -61,6 +61,12 @@ networks:
       # bumping @tinfoilsh/verifier.
       - github-proxy.tinfoil.sh
       - kds-proxy.tinfoil.sh
+      # This container's own public hostname. attestSelf (server/agent-leaves.ts)
+      # dials it to read back its own attestation, so the measurement and tag
+      # stamped into every assistant's `pdc2` are this enclave's — needed since
+      # the agent leaves came on (docs/tinfoil-container.md §Turning the agent
+      # leaves on). Staging's config carries its own twin of this line.
+      - peachy-assistant.peachy.containers.tinfoil.dev
       # Tools the run may call. The assistant's tools execute IN-PROCESS against
       # the rpc handlers (server/ai-tools.ts imports chatServiceHandlers from
       # ./routes and dials a `https://internal/…` URL that never leaves the
@@ -179,6 +185,33 @@ containers:
       # "contact matching is unavailable" and sends nothing until a claimer
       # is here.
       - PEACHY_CONTACTS_IN_ENCLAVE: "1"
+      # AGENT LEAVES, ON IN PRODUCTION SINCE v0.1.9 (docs/tinfoil-container.md
+      # §Turning the agent leaves on; the threat model is
+      # docs/e2e-with-member-agents.md). With this on, a group that has allowed
+      # assistants can have a member add THEIR OWN assistant as a visible MLS
+      # leaf, held in this process and nowhere else. Nothing is added by this
+      # line: the group's switch defaults off, and only the owner's own client
+      # can Add their assistant. Measured rather than mounted, because "does
+      # this enclave hold a seat in people's groups" is a claim a person should
+      # read off the attestation. docs/transparency-report.md's
+      # `agent-leaves-in-production` marker is tied to this line by a test.
+      #
+      # The flag alone is not enough: agentLeavesEnabled() also needs
+      # PEACHY_AGENT_ROOT_KEY and PEACHY_AGENT_CREDENTIAL_KEY, the two secrets
+      # below. The latter is the DERIVED agent seed, never the device root.
+      - PEACHY_AGENT_LEAVES: "1"
+      # Which enclave this process is, stated rather than defaulted:
+      # attestSelf refuses to run the leaves without both (a defaulted pair is
+      # how staging once stamped production's measurement into credentials).
+      - PEACHY_WORKER_ENCLAVE_HOST: peachy-assistant.peachy.containers.tinfoil.dev
+      - PEACHY_WORKER_CONFIG_REPO: kaifaust/peachy-enclave
+      # The API's device PUBLIC key (kid 8730c349, read off
+      # https://api.pchy.app/healthz/device-credential-keys, "use": "device",
+      # "current": true). This process signs no `pdc1` and cannot, but it must
+      # CHECK the one every member's leaf carries. Public material, measured so
+      # the attestation commits to which server key this release trusts; a
+      # rotation of the device key is therefore a release of this container.
+      - PEACHY_DEVICE_CREDENTIAL_PUBLIC_KEYS: H6qyFNpHLMcUuB+Nfv1XtbPU0P01Ni7TQKPi1870a2g=
     # Names only; values live in Tinfoil's secret store (or, for private
     # secrets, in a keyserver Peachy runs). The list matches render.yaml's
     # peachy-assistant `sync: false` block. Shorter since 2026-09-17:
@@ -195,6 +228,11 @@ containers:
       - R2_BUCKET
       - R2_PUBLIC_BASE_URL
       - R2_PRIVATE_BUCKET
+      # The agent leaves' two (since v0.1.9). The sealing root for every
+      # assistant's state, and the DERIVED agent credential seed that signs
+      # `pdc2` only. The device root is in neither list and never will be.
+      - PEACHY_AGENT_ROOT_KEY
+      - PEACHY_AGENT_CREDENTIAL_KEY
     # The root filesystem is read-only by default (keep it). The spawned Claude
     # Code CLI and its compile cache write under /tmp, so that gets a tmpfs —
     # RAM, counted against the 8 GB, wiped on every relaunch.
