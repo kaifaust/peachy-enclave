@@ -1,5 +1,11 @@
 # Tinfoil Container definition for peachy-assistant — the PRODUCTION shape.
 #
+# The name is historical: the assistant is gone (docs/private-ai-spec.md), and
+# what runs in here is the WORKER (server/worker-main.ts) — device triage,
+# contact discovery and the tagger, each behind its own flag in the measured
+# `env:` block below. The container, image and hostname keep the old name
+# because renaming a live service is a human's call.
+#
 # The container was created on 2026-09-17. This file is no longer a proposal:
 # it is what the deployed enclave is measured against.
 #
@@ -22,12 +28,9 @@
 cvm-version: 0.14.7
 
 # The smallest shape on offer (2 cores / 8 GB). 8 GB is 4× the Render plan the
-# worker ran on. server/container.ts derives the concurrent-run cap from the
-# cgroup limit — but the cgroup files are NOT readable inside the enclave, so
-# the derivation takes its fail-safe and announces 2 rather than the ~16 this
-# shape would otherwise buy. PEACHY_MAX_CONCURRENT_RUNS below is how the memory
-# declared here reaches the process that has to live inside it.
-# ~$166/month at list price, running 24/7.
+# worker ran on, and far more than a worker that claims one short job at a time
+# needs now that no assistant run spawns a subprocess in here — but there is no
+# smaller shape to choose. ~$166/month at list price, running 24/7.
 cpus: 2
 memory: 8192
 
@@ -47,7 +50,8 @@ networks:
       # attested enclave (server/inference.ts). api.anthropic.com came OUT of
       # this list that day, which makes the allowlist itself part of the
       # claim — a build of this image physically cannot reach Anthropic, and
-      # the allowlist is inside what the attestation measures.
+      # the allowlist is inside what the attestation measures. Device triage
+      # and the tagger are the calls that go here.
       - inference.tinfoil.sh
       # Attestation of inference.tinfoil.sh at boot (server/tinfoil-attest.ts
       # via @tinfoilsh/verifier). MEASURED on 2026-09-17 by running a full
@@ -57,34 +61,15 @@ networks:
       # these three hosts are the whole set. (The earlier guess listed
       # api.github.com, github.com, two sigstore hosts and kdsintf.amd.com —
       # none were contacted.) A missing host here fails closed as a 503 on
-      # every run, for everyone — there are no cohorts — so re-measure after
-      # bumping @tinfoilsh/verifier.
+      # every model call, for everyone — there are no cohorts — so re-measure
+      # after bumping @tinfoilsh/verifier.
       - github-proxy.tinfoil.sh
       - kds-proxy.tinfoil.sh
-      # This container's own public hostname. attestSelf (server/agent-leaves.ts)
-      # dials it to read back its own attestation, so the measurement and tag
-      # stamped into every assistant's `pdc2` are this enclave's — needed since
-      # the agent leaves came on (docs/tinfoil-container.md §Turning the agent
-      # leaves on). Staging's config carries its own twin of this line.
-      - peachy-assistant.peachy.containers.tinfoil.dev
-      # Tools the run may call. The assistant's tools execute IN-PROCESS against
-      # the rpc handlers (server/ai-tools.ts imports chatServiceHandlers from
-      # ./routes and dials a `https://internal/…` URL that never leaves the
-      # process), so a tool annotated AI_ACCESS_TOOL reaches whatever its
-      # handler reaches — from in here, not from peachy-api. search_places is
-      # the one with an outbound leg, and it has TWO: a text query goes to
-      # places.googleapis.com (server/google-places.ts searchGooglePlaces), and
-      # the current-location branch goes to maps.googleapis.com
-      # (reverseGeocodeGoogle, server/handlers/places.ts). The second host was
-      # missing here until 2026-09-18 and the failure was silent by
-      # construction — reverseGeocodeGoogle "never throws" and answers null on a
-      # blocked fetch, so the tool degraded to the bundled gazetteer inside the
-      # enclave while working perfectly on peachy-api. Both hosts, or neither.
-      - places.googleapis.com
-      - maps.googleapis.com
       # R2 — the account's S3 endpoint and the public media host, derived from
       # prd's R2_ACCOUNT_ID and R2_PUBLIC_BASE_URL on 2026-09-17. Both are
       # already public: the media host is in every image URL the app serves.
+      # server/r2.ts is in the worker's import graph (through server/rows.ts),
+      # which is why R2's secrets are mounted below.
       - c6b00e1a7686e9f69631784067aef768.r2.cloudflarestorage.com
       - pub-8dfa5e1a5ad9455b8806d7af46594254.r2.dev
 
@@ -106,28 +91,17 @@ containers:
     # publicly pullable doesn't affect verifiability" — but pulling a private
     # one needs registry credentials, and this org does not have that
     # entitlement yet (§Decisions that are not mine to make).
-    image: ghcr.io/kaifaust/peachy-assistant:v0.1.8@sha256:b5ac6a2a8f07b3ba92767ed5833c480891adb49d33a4305b888c9ffc7f8b4363
+    image: ghcr.io/kaifaust/peachy-assistant:v0.1.10@sha256:473f63f8e1f6b7a3d4fb55601a1ea0ec59e3893aa4266346594b9754a32c28b4
     networks: [egress]
     env:
       # server/db.ts productionSignal() keys off RENDER; outside Render it is
-      # unset and server/container.ts would size the run cap off the host's
-      # RAM if the cgroup limit were ever unreadable. Keep the fail-safe armed.
+      # unset, and this process must count as production in here (it refuses
+      # the e2e forced-attestation-failure knob on that signal, among others).
       - RENDER: "1"
       - RENDER_SERVICE_NAME: peachy-assistant-tinfoil
-      # …and this is the other half: the operator pin that overrules that
-      # fail-safe, because in here the budget IS known — it is the `memory:`
-      # figure a dozen lines up, published and measured with the rest of this
-      # file. FOUR and not the sixteen 8 GB would derive to, deliberately:
-      #   * each concurrent run is a spawned Agent SDK CLI subprocess, ~400 MB
-      #     RSS measured (see the header of server/container.ts);
-      #   * /tmp is a 1 GB tmpfs below, which is RAM and counts against the
-      #     same 8 GB — the derivation knows nothing about it;
-      #   * an OOM in here is not a restart, it is an enclave relaunch.
-      # 320 MB reserve + 512 first run + 3 × 224 MB ≈ 1.5 GB by the model, ~2 GB
-      # by the pessimistic 400 MB-a-run reading, plus the tmpfs: comfortable.
-      # Raise it once there is a measurement from inside a live enclave.
-      - PEACHY_MAX_CONCURRENT_RUNS: "4"
       - PEACHY_HEALTH_PORT: "8080"
+      # Node's module compile cache. The root filesystem is read-only, so it
+      # lives on the /tmp tmpfs below.
       - NODE_COMPILE_CACHE: /tmp/peachy-agent-cc
       # WHICH MODEL, IN PUBLIC. These three moved out of `secrets:` on
       # 2026-09-17, and the move is the point: everything in this file is
@@ -139,23 +113,12 @@ containers:
       - PEACHY_INFERENCE_PROVIDER: tinfoil
       - PEACHY_TINFOIL_MODEL: glm-5-3-flash
       # deepseek and not glm on the fast tier: glm-5-3-flash answered 0/23 of
-      # the triage eval inside triage.ts's 8 s budget on 2026-09-17 while
-      # deepseek-v4-1-flash answered 22/23 at half the latency
+      # the triage eval inside the then server-side triage's 8 s budget on
+      # 2026-09-17 while deepseek-v4-1-flash answered 22/23 at half the latency
       # (docs/inference-provider.md §Re-measured on 2026-09-17, and it is a RED).
-      # A timed-out triage batch buzzes everyone and silently empties the
-      # commons, so the fast tier stays on the model that answers in time until
-      # a re-measurement says otherwise.
+      # The fast tier stays on the model that answers in time until a
+      # re-measurement says otherwise.
       - PEACHY_TINFOIL_FAST_MODEL: deepseek-v4-1-flash
-      # Rung-2 step 1 (docs/rung2-worker-migration.md): this process CLAIMS
-      # `triage_jobs`, so the push-triage prompt — the one model prompt that
-      # reads other people's messages on the API's behalf — is assembled in
-      # here, inside the measurement, and peachy-api hands over message ids
-      # only. Declared in public for the same reason the model ids are: a
-      # verifier can read that the enclave, not the operator's API, is the
-      # process that reads those words for triage. The API side of the flag is
-      # set separately (Doppler prd); either side alone is safe — an unclaimed
-      # job times out into the existing no-verdict path and fails OPEN.
-      - PEACHY_TRIAGE_IN_WORKER: "1"
       # Rung-2 step 3 (docs/rung2-worker-migration.md): the same move for the
       # TAGGER, which is the highest-volume body→prompt path in the product —
       # one classification per message sent, plus the ten-minute backfill sweep
@@ -185,57 +148,43 @@ containers:
       # "contact matching is unavailable" and sends nothing until a claimer
       # is here.
       - PEACHY_CONTACTS_IN_ENCLAVE: "1"
-      # AGENT LEAVES, ON IN PRODUCTION SINCE v0.1.9 (docs/tinfoil-container.md
-      # §Turning the agent leaves on; the threat model is
-      # docs/e2e-with-member-agents.md). With this on, a group that has allowed
-      # assistants can have a member add THEIR OWN assistant as a visible MLS
-      # leaf, held in this process and nowhere else. Nothing is added by this
-      # line: the group's switch defaults off, and only the owner's own client
-      # can Add their assistant. Measured rather than mounted, because "does
-      # this enclave hold a seat in people's groups" is a claim a person should
-      # read off the attestation. docs/transparency-report.md's
-      # `agent-leaves-in-production` marker is tied to this line by a test.
+      # DEVICE TRIAGE — the AI notification options (server/device-triage-jobs.ts,
+      # docs/private-ai-spec.md §Device-side triage). A person's device seals a
+      # notification to this enclave's per-boot key; peachy-api relays the
+      # sealed blob it cannot open, this process opens it, asks the model
+      # whether to notify or hold, and seals the verdict back. Declared in the
+      # public, measured block for the same reason as the two flags above: a
+      # verifier can read off the release artifact that this is where those
+      # words are read.
       #
-      # The flag alone is not enough: agentLeavesEnabled() also needs
-      # PEACHY_AGENT_ROOT_KEY and PEACHY_AGENT_CREDENTIAL_KEY, the two secrets
-      # below. The latter is the DERIVED agent seed, never the device root.
-      - PEACHY_AGENT_LEAVES: "1"
-      # Which enclave this process is, stated rather than defaulted:
-      # attestSelf refuses to run the leaves without both (a defaulted pair is
-      # how staging once stamped production's measurement into credentials).
-      - PEACHY_WORKER_ENCLAVE_HOST: peachy-assistant.peachy.containers.tinfoil.dev
-      - PEACHY_WORKER_CONFIG_REPO: kaifaust/peachy-enclave
-      # The API's device PUBLIC key (kid 8730c349, read off
-      # https://api.pchy.app/healthz/device-credential-keys, "use": "device",
-      # "current": true). This process signs no `pdc1` and cannot, but it must
-      # CHECK the one every member's leaf carries. Public material, measured so
-      # the attestation commits to which server key this release trusts; a
-      # rotation of the device key is therefore a release of this container.
-      - PEACHY_DEVICE_CREDENTIAL_PUBLIC_KEYS: H6qyFNpHLMcUuB+Nfv1XtbPU0P01Ni7TQKPi1870a2g=
+      # Like contact discovery, the key pair is generated at boot in here and
+      # mounted from nowhere; only its public half leaves, on /healthz/config.
+      # And like contact discovery the two sides read the flag in opposite
+      # directions: this claimer runs only when explicitly on, and the API
+      # relays unless explicitly off (a rollback, not a switch).
+      - PEACHY_DEVICE_TRIAGE_IN_ENCLAVE: "1"
     # Names only; values live in Tinfoil's secret store (or, for private
     # secrets, in a keyserver Peachy runs). The list matches render.yaml's
     # peachy-assistant `sync: false` block. Shorter since 2026-09-17:
     # ANTHROPIC_API_KEY is gone because nothing reads it, and
     # PEACHY_INFERENCE_PROVIDER moved to the public `env:` block above, where
-    # it says something a verifier can check.
+    # it says something a verifier can check. Shorter again with the assistant
+    # gone: GOOGLE_MAPS_API_KEY was its search_places tool and the agent
+    # leaves' sealing root went with the leaves, and nothing in the worker
+    # reads either. The device root (PEACHY_DEVICE_CREDENTIAL_KEY) is not in this
+    # list and never will be.
     secrets:
       - DATABASE_URL
       - TINFOIL_API_KEY
-      - GOOGLE_MAPS_API_KEY
       - R2_ACCOUNT_ID
       - R2_ACCESS_KEY_ID
       - R2_SECRET_ACCESS_KEY
       - R2_BUCKET
       - R2_PUBLIC_BASE_URL
       - R2_PRIVATE_BUCKET
-      # The agent leaves' two (since v0.1.9). The sealing root for every
-      # assistant's state, and the DERIVED agent credential seed that signs
-      # `pdc2` only. The device root is in neither list and never will be.
-      - PEACHY_AGENT_ROOT_KEY
-      - PEACHY_AGENT_CREDENTIAL_KEY
-    # The root filesystem is read-only by default (keep it). The spawned Claude
-    # Code CLI and its compile cache write under /tmp, so that gets a tmpfs —
-    # RAM, counted against the 8 GB, wiped on every relaunch.
+    # The root filesystem is read-only by default (keep it). Anything the
+    # process writes, the compile cache included, goes under /tmp, so that gets
+    # a tmpfs — RAM, counted against the 8 GB, wiped on every relaunch.
     read_only: true
     tmpfs:
       /tmp: "size=1g,mode=1777"
@@ -251,13 +200,14 @@ containers:
       start_period: 90s
     restart: always
     stop_signal: SIGTERM
-    # server/assistant-main.ts drains in-flight runs for up to 25s on SIGTERM.
+    # server/worker-main.ts stops claiming on SIGTERM and drains in-flight jobs
+    # for up to 10s.
     stop_timeout: 30
 
 # Mandatory, and the reason the worker grew a health listener: a deployment
 # must forward SOMETHING. Only the two health paths are exposed; everything
 # else 404s at the shim. There is no inbound rpc surface here by design —
-# the worker's inputs and outputs cross Postgres (server/assistant-main.ts).
+# the worker's inputs and outputs cross Postgres (server/worker-main.ts).
 #
 # The explicit-path form (rather than the template's `/*`) was verified on the
 # probe deployment: both listed paths answered through the shim.
