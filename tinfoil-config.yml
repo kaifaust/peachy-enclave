@@ -91,7 +91,7 @@ containers:
     # publicly pullable doesn't affect verifiability" — but pulling a private
     # one needs registry credentials, and this org does not have that
     # entitlement yet (§Decisions that are not mine to make).
-    image: ghcr.io/kaifaust/peachy-assistant:v0.1.10@sha256:473f63f8e1f6b7a3d4fb55601a1ea0ec59e3893aa4266346594b9754a32c28b4
+    image: ghcr.io/kaifaust/peachy-assistant:v0.1.11@sha256:276209f7fc7370dd37528927ac2250d9318896654bd73f6229ef6979a2670807
     networks: [egress]
     env:
       # server/db.ts productionSignal() keys off RENDER; outside Render it is
