@@ -91,7 +91,7 @@ containers:
     # publicly pullable doesn't affect verifiability" — but pulling a private
     # one needs registry credentials, and this org does not have that
     # entitlement yet (§Decisions that are not mine to make).
-    image: ghcr.io/kaifaust/peachy-assistant:v0.1.11@sha256:276209f7fc7370dd37528927ac2250d9318896654bd73f6229ef6979a2670807
+    image: ghcr.io/kaifaust/peachy-assistant:v0.1.12@sha256:26dd1384b5aaab451260ba0b12dc2f2983ee915a8ea27cf87d06327f18f7f0ff
     networks: [egress]
     env:
       # server/db.ts productionSignal() keys off RENDER; outside Render it is
@@ -163,6 +163,16 @@ containers:
       # directions: this claimer runs only when explicitly on, and the API
       # relays unless explicitly off (a rollback, not a switch).
       - PEACHY_DEVICE_TRIAGE_IN_ENCLAVE: "1"
+      # THE PIN VAULT (server/pin-vault.ts, docs/device-identity.md §The PIN
+      # vault). A device seals a backup of the account key, locked under an
+      # Argon2id stretch of the person's PIN, to this enclave's per-boot key;
+      # the entry lives in this process's memory with a ten-guess limit and is
+      # never written anywhere, so no operator can roll a guess counter back.
+      # Added 2026-09-24, first released in v0.1.12 on 2026-09-25. Without
+      # it the enclave publishes no `pinVaultPublicKey` and every client reads
+      # the PIN as unavailable. Same opposite-direction reading as the two
+      # flags above: this side holds the vault only when explicitly on.
+      - PEACHY_PIN_VAULT_IN_ENCLAVE: "1"
     # Names only; values live in Tinfoil's secret store (or, for private
     # secrets, in a keyserver Peachy runs). The list matches render.yaml's
     # peachy-assistant `sync: false` block. Shorter since 2026-09-17:
