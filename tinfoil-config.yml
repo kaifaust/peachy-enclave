@@ -91,7 +91,7 @@ containers:
     # publicly pullable doesn't affect verifiability" — but pulling a private
     # one needs registry credentials, and this org does not have that
     # entitlement yet (§Decisions that are not mine to make).
-    image: ghcr.io/kaifaust/peachy-assistant:v0.1.14@sha256:a8a6ee5f6b81a1c4b21d03e29e15f03c9fbc5ce04e480501a65342f559bef00f
+    image: ghcr.io/kaifaust/peachy-assistant:v0.1.15@sha256:1c51084f6a852204c6ce4d97981d4b105b3e2d6221a95130ee3e8bf02e5b95dd
     networks: [egress]
     env:
       # server/db.ts productionSignal() keys off RENDER; outside Render it is
@@ -149,6 +149,14 @@ containers:
       # "contact matching is unavailable" and sends nothing until a claimer
       # is here.
       - PEACHY_CONTACTS_IN_ENCLAVE: "1"
+      # THE CONTACT-DISCOVERY WAKE, queued from the match itself
+      # (server/contact-discovery-budget.ts, docs/contact-discovery.md §The
+      # wake). When a newcomer's book matches people, this process queues one
+      # content-free wake per person, naming nobody else, so peachy-api is
+      # never told who matched whom. Only when explicitly on. Once a release
+      # carrying it is live, peachy-api's PEACHY_CONTACT_WAKE_FROM_CLIENT is
+      # set to 0 and the ids a newcomer's device sends stop waking anybody.
+      - PEACHY_CONTACT_WAKE_IN_ENCLAVE: "1"
       # DEVICE TRIAGE — the AI notification options (server/device-triage-jobs.ts,
       # docs/private-ai-spec.md §Device-side triage). A person's device seals a
       # notification to this enclave's per-boot key; peachy-api relays the
@@ -174,6 +182,12 @@ containers:
       # the PIN as unavailable. Same opposite-direction reading as the two
       # flags above: this side holds the vault only when explicitly on.
       - PEACHY_PIN_VAULT_IN_ENCLAVE: "1"
+      # THE HYBRID BOX, phase 3 (server/enclave-seal.ts, docs/contact-discovery.md
+      # §The hybrid box). Not set yet: the image after v0.1.14 opens both
+      # version 1 (X25519) and version 2 (X25519 + ML-KEM-1024) frames on all
+      # three doors. Once the builds that seal only version 1 have aged out, a
+      # release adds this line and every version-1 frame is refused:
+      # - PEACHY_ENCLAVE_SEAL_HYBRID_REQUIRED: "1"
     # Names only; values live in Tinfoil's secret store (or, for private
     # secrets, in a keyserver Peachy runs). The list matches render.yaml's
     # peachy-assistant `sync: false` block. Shorter since 2026-09-17:
@@ -193,6 +207,21 @@ containers:
       - R2_BUCKET
       - R2_PUBLIC_BASE_URL
       - R2_PRIVATE_BUCKET
+      # THE PHONE LOOKUP KEY (docs/contact-discovery.md §The blind index): 32
+      # random bytes, base64, keying the blind index the enclave matches
+      # address books by, so no number from a book ever reaches Postgres.
+      # Created by piping a random source straight into the Tinfoil store and
+      # held NOWHERE else (not Doppler, not render.yaml: the Render worker is
+      # not an enclave and peachy-api refuses to boot with it). It needs no
+      # backup: every index is recomputed in here from users.phone, so a lost
+      # key is a rotation. First declared after v0.1.14; a declared secret
+      # that is not mounted is simply absent, and the worker then matches by
+      # plaintext exactly as before. The release that mounts
+      # it is a `create --replace` with one more `--secret` flag; once its
+      # /healthz/config reads `phoneLookup.mode: "blind"`, a later release adds
+      # `PEACHY_PHONE_LOOKUP_REQUIRED: "1"` to `env:` so the plaintext match is
+      # refused outright.
+      - PEACHY_PHONE_LOOKUP_KEY
     # The root filesystem is read-only by default (keep it). Anything the
     # process writes, the compile cache included, goes under /tmp, so that gets
     # a tmpfs — RAM, counted against the 8 GB, wiped on every relaunch.
