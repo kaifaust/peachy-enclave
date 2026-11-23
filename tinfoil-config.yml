@@ -91,7 +91,7 @@ containers:
     # publicly pullable doesn't affect verifiability" — but pulling a private
     # one needs registry credentials, and this org does not have that
     # entitlement yet (§Decisions that are not mine to make).
-    image: ghcr.io/kaifaust/peachy-assistant:v0.1.21@sha256:93f2381c81271e9596c20ba545a646ed8e6941073ed7bb6c899bb9937b00004a
+    image: ghcr.io/kaifaust/peachy-assistant:v0.1.22@sha256:b96f3a7f48d33e1bb57f5f9be48a202831a155816c0fd6635fdc5e2604b8c7c9
     networks: [egress]
     env:
       # server/db.ts productionSignal() keys off RENDER; outside Render it is
@@ -187,6 +187,22 @@ containers:
       # (PEACHY_PHONE_LOOKUP_KEY, below) not mounted, every discovery call
       # answers `unavailable` rather than falling back.
       - PEACHY_PHONE_LOOKUP_REQUIRED: "1"
+      # THE KEY TRANSPARENCY AUDITOR (server/kt-auditor.ts,
+      # docs/key-transparency-spec.md §6.4). This process reads the log's
+      # entries from Postgres, checks each one extends the ones before it, and
+      # signs heads over the one lineage it verified, under an Ed25519 key made
+      # IN HERE at boot, held in memory and stored nowhere; only the public half
+      # leaves, as `ktAuditorPublicKey` on /healthz/config, which is where
+      # clients read it. It sees VRF outputs, commitments, positions and
+      # timestamps, never an account, handle, number or key, so it needs no
+      # secret and no egress beyond Postgres. A relaunch is a new instance with
+      # a new key, handed over by the old one (or logged as a cold start).
+      # The log's public keys it signs over are compiled into the image.
+      # PREPARED ON `bots`, NOT RELEASED: it rides the next worker release cut
+      # from a deployed main commit at or after bots R0, on Kai's go
+      # (docs/tinfoil-container.md, the key transparency entry). Until then the
+      # production log has no auditor and appends nothing.
+      - PEACHY_KT_AUDITOR_IN_ENCLAVE: "1"
     # Names only; values live in Tinfoil's secret store (or, for private
     # secrets, in a keyserver Peachy runs). The list matches render.yaml's
     # peachy-assistant `sync: false` block. Shorter since 2026-09-17:
