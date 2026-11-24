@@ -72,6 +72,15 @@ networks:
       # which is why R2's secrets are mounted below.
       - c6b00e1a7686e9f69631784067aef768.r2.cloudflarestorage.com
       - pub-8dfa5e1a5ad9455b8806d7af46594254.r2.dev
+      # @PEACHY, PEACHY'S OWN BOT (server/peachy-bot.ts): an ordinary bot, so
+      # it talks to the API as every bot does, over the public endpoint (the
+      # SDK runs against https://api.pchy.app and nothing else). And it reads
+      # the key transparency auditor's key the way every bot does, off this
+      # worker's own attested config page (sdk/bot/src/runtime/keytrans-auditor.ts),
+      # whose verification goes through the two tinfoil.sh proxies above.
+      # Both unused until PEACHY_BOT_IN_ENCLAVE (below) and its switch are on.
+      - api.pchy.app
+      - peachy-assistant.peachy.containers.tinfoil.dev
 
 # A LIST of containers, each with a `name` — not a map keyed by name. The
 # decoder in tinfoilsh/tinfoil-config declares `Containers []Container`, so the
@@ -91,7 +100,7 @@ containers:
     # publicly pullable doesn't affect verifiability" — but pulling a private
     # one needs registry credentials, and this org does not have that
     # entitlement yet (§Decisions that are not mine to make).
-    image: ghcr.io/kaifaust/peachy-assistant:v0.1.22@sha256:b96f3a7f48d33e1bb57f5f9be48a202831a155816c0fd6635fdc5e2604b8c7c9
+    image: ghcr.io/kaifaust/peachy-assistant:v0.1.23@sha256:3c37f192c4b5e4e536d030a8029ffdc3a1a62e3fe1aec6d7264e239bb64d7360
     networks: [egress]
     env:
       # server/db.ts productionSignal() keys off RENDER; outside Render it is
@@ -203,6 +212,19 @@ containers:
       # (docs/tinfoil-container.md, the key transparency entry). Until then the
       # production log has no auditor and appends nothing.
       - PEACHY_KT_AUDITOR_IN_ENCLAVE: "1"
+      # @PEACHY, PEACHY'S OWN BOT (server/peachy-bot.ts; docs/protocol/bots.md
+      # §Accounts: the Peachy organization's first account, run by code). Its
+      # one MLS device lives in here: the keys sit in a store sealed under
+      # PEACHY_BOT_STORE_KEY (a secret below, held nowhere else), kept in
+      # Postgres as rows the database cannot read, and its model calls go
+      # through this process's attested shim on its own key
+      # (PEACHY_BOT_TINFOIL_API_KEY) to PEACHY_TINFOIL_MODEL. Declared here so
+      # a verifier can read off the release artifact that this is where it
+      # runs. Three locks keep it stopped: this line, the store key mounted,
+      # and the `peachy_bot` remote flag (default off, the kill switch).
+      # `/healthz/config` → `peachyBot` says which one holds it (state no-key,
+      # stopped, running, retrying).
+      - PEACHY_BOT_IN_ENCLAVE: "1"
     # Names only; values live in Tinfoil's secret store (or, for private
     # secrets, in a keyserver Peachy runs). The list matches render.yaml's
     # peachy-assistant `sync: false` block. Shorter since 2026-09-17:
@@ -233,6 +255,23 @@ containers:
       # refuses the plaintext match, so a release must mount it (one
       # `--secret` flag on `create --replace`).
       - PEACHY_PHONE_LOOKUP_KEY
+      # @PEACHY's three (server/peachy-bot.ts). Each release mounts all three,
+      # with a value in each (Tinfoil's behavior for a declared name with no
+      # mounted value is not measured, so none is left without one):
+      #   PEACHY_BOT_STORE_KEY        32 random bytes, base64url: the seal on
+      #                               its store. Piped from a random source
+      #                               straight into the Tinfoil store and held
+      #                               NOWHERE else, as the phone lookup key.
+      #                               Lose it and the bot links a new device
+      #                               (its chats re-add it).
+      #   PEACHY_BOT_TINFOIL_API_KEY  its own Tinfoil key on the company
+      #                               account, so its spend is its own.
+      #   PEACHY_BOT_CONNECT_CODE     the one-time Connect code for its first
+      #                               link (15 minutes); "none" on every other
+      #                               release.
+      - PEACHY_BOT_STORE_KEY
+      - PEACHY_BOT_TINFOIL_API_KEY
+      - PEACHY_BOT_CONNECT_CODE
     # The root filesystem is read-only by default (keep it). Anything the
     # process writes, the compile cache included, goes under /tmp, so that gets
     # a tmpfs — RAM, counted against the 8 GB, wiped on every relaunch.
